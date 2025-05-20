@@ -1,41 +1,53 @@
-from fastapi import FastAPI
-
+from . import order_service
+from .order_service import DuplicateOrderError, OrderCreationError, OrderLookupError
+from fastapi import FastAPI, HTTPException, status, Depends, Path
+from .model import User
+from .schemas import CreateOrderRequest, OrderResponse
+from typing import List
 
 app = FastAPI(
     title="Investifi Backend Coding Challenge",
 )
 
 
-@app.get("/")
-def hello_world():
-    """
-    NOTE: This is route is used as an example for the test suite
-    No action needed here
-    """
-    return {"hello": "world"}
+def get_existing_user_or_404(user_id: str = Path(...)) -> User:
+    if not (user := User.safe_get(user_id)):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found."
+        )
+
+    return user
 
 
-@app.get("/recurring-orders")
-def get_recurring_orders():
-    """
-    TODO
-    # Requirements:
-    # The GET route should accept a User ID and return only said users recurring orders
-    # if no ID is provided, an error should be raised.
-    """
-    return {}
+@app.post(
+    "/users/{user_id}/recurring-orders",
+    response_model=OrderResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_order(
+    user_id: str = Path(...),
+    request: CreateOrderRequest = ...,
+    user: User = Depends(get_existing_user_or_404),
+):
+    try:
+        order = order_service.create_order(user.user_id, request)
+        return OrderResponse(**order.model_dump())
+    except DuplicateOrderError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except (OrderCreationError, OrderLookupError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
-@app.post("/recurring-orders")
-def post_recurring_orders():
-    """
-    TODO
-    Requirements:
-    The POST route should create a recurring order for a user
-    A recurring order can be for only BTC or ETH
-    A recurring order must have a concept of Frequency. Only Daily or Bi-Monthly frequencies is allowed
-    A User can only have 1 recurring order for a given Crypto/Frequency i.e. BTC/Daily
-    A recurring order must have a USD amount greater than 0
-    A recurring order needs to be associated with a specifc user.
-    """
-    return {}
+@app.get("/users/{user_id}/recurring-orders", response_model=List[OrderResponse])
+def get_user_orders(
+    user_id: str = Path(...), user: User = Depends(get_existing_user_or_404)
+):
+    try:
+        orders = order_service.get_orders(user.user_id)
+        return [OrderResponse(**order.model_dump()) for order in orders]
+    except OrderLookupError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
